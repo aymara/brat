@@ -54,7 +54,7 @@ def ann_logger(directory):
                 handler.setFormatter(formatter)
                 l.addHandler(handler)
                 ann_logger.__logger = l
-            except IOError, e:
+            except IOError as e:
                 Messager.error("""Error: failed to initialize annotation log %s: %s.
 Edit action not logged.
 Please check the Annotation-log logfile setting in tools.conf""" % (annlogfile, e))

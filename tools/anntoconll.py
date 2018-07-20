@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Convert text and standoff annotations into CoNLL format.
 
@@ -11,7 +11,6 @@ import os
 from collections import namedtuple
 from os import path
 from subprocess import Popen, PIPE
-from cStringIO import StringIO
 
 # assume script in brat tools/ directory, extend path to find sentencesplit.py
 sys.path.append(os.path.join(os.path.dirname(__file__), '../server/src'))
@@ -35,6 +34,10 @@ def argparser():
                     help='Standoff annotation file suffix (default "ann")')
     ap.add_argument('-c', '--singleclass', default=None,
                     help='Use given single class for annotations')
+    ap.add_argument('-f', '--annfile', default=None,
+                    help='Retrieve annotations from the given file instead of using the suffix')
+    ap.add_argument('-l', '--language', default='eng',
+                    help='language used for tokenization')
     ap.add_argument('-n', '--nosplit', default=False, action='store_true', 
                     help='No sentence splitting')
     ap.add_argument('-o', '--outsuffix', default="conll",
@@ -103,7 +106,8 @@ def attach_labels(labels, lines):
 # NERsuite tokenization: any alnum sequence is preserved as a single
 # token, while any non-alnum character is separated into a
 # single-character token. TODO: non-ASCII alnum.
-TOKENIZATION_REGEX = re.compile(r'([0-9a-zA-Z]+|[^0-9a-zA-Z])')
+TOKENIZATION_REGEX = {'eng' : re.compile(r'([0-9a-zA-Z]+|[^0-9a-zA-Z])'),
+                      'fre' : re.compile(r'([0-9a-zA-ZàéèùâêîôûäëïöüÀÉÈÙÂÊÎÔÛÄËÏÖÜçÇ]+\'?|[^0-9a-zA-Z])')}
 
 NEWLINE_TERM_REGEX = re.compile(r'(.*?\n)')
 
@@ -125,7 +129,7 @@ def text_to_conll(f):
     for s in sentences:
         nonspace_token_seen = False
 
-        tokens = [t for t in TOKENIZATION_REGEX.split(s) if t]
+        tokens = [t for t in TOKENIZATION_REGEX[options.language].split(s) if t]
 
         for t in tokens:
             if not t.isspace():
@@ -142,7 +146,7 @@ def text_to_conll(f):
         lines = relabel(lines, get_annotations(f.name))
 
     lines = [[l[0], str(l[1]), str(l[2]), l[3]] if l else l for l in lines]
-    return StringIO('\n'.join(('\t'.join(l) for l in lines)))
+    return '\n'.join(('\t'.join(l) for l in lines))
 
 def relabel(lines, annotations):
     global options
@@ -168,7 +172,7 @@ def relabel(lines, annotations):
         for o in range(start, end):
             if o in offset_label:
                 if o != start:
-                    print >> sys.stderr, 'Warning: annotation-token boundary mismatch: "%s" --- "%s"' % (token, offset_label[o].text)
+                    sys.stderr.write( 'Warning: annotation-token boundary mismatch: "%s" --- "%s"' % (token, offset_label[o].text))
                 label = offset_label[o].type
                 break
 
@@ -220,7 +224,7 @@ def process_files(files):
             except:
                 # TODO: error processing
                 raise
-    except Exception, e:
+    except Exception as e:
         for p in nersuite_proc:
             p.kill()
         if not isinstance(e, FormatError):
@@ -246,7 +250,11 @@ def parse_textbounds(f):
             continue
 
         id_, type_offsets, text = l.split('\t')
-        type_, start, end = type_offsets.split()
+        type_, _, ranges = type_offsets.partition(' ')
+        ranges = ranges.split(';')
+        if len(ranges) > 1:
+            sys.stderr.write('Warn: discontinuous ranges are not supported while parsing {}\n'.format(l))
+        start, end = ranges[0].split()
         start, end = int(start), int(end)
 
         textbounds.append(Textbound(start, end, type_, text))
@@ -265,10 +273,10 @@ def eliminate_overlaps(textbounds):
                 continue
             # eliminate shorter
             if t1.end-t1.start > t2.end-t2.start:
-                print >> sys.stderr, "Eliminate %s due to overlap with %s" % (t2, t1)
+                sys.stderr.write( "Eliminate %s due to overlap with %s\n" % (t2, t1))
                 eliminate[t2] = True
             else:
-                print >> sys.stderr, "Eliminate %s due to overlap with %s" % (t1, t2)
+                sys.stderr.write("Eliminate %s due to overlap with %s\n" % (t1, t2))
                 eliminate[t1] = True
 
     return [t for t in textbounds if not t in eliminate]
@@ -276,7 +284,10 @@ def eliminate_overlaps(textbounds):
 def get_annotations(fn):
     global options
 
-    annfn = path.splitext(fn)[0]+options.annsuffix
+    if options.annfile:
+        annfn = options.annfile
+    else:
+        annfn = path.splitext(fn)[0]+options.annsuffix
     
     with open(annfn, 'rU') as f:
         textbounds = parse_textbounds(f)

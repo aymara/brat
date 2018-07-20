@@ -1,9 +1,11 @@
 #!/usr/bin/env python
 
-# Given a set of brat-flavored standoff .ann files, catenates them
-# into a single .ann file (with reference to the corresponding .txt
-# files) so that the resulting .ann applies for the simple catenation
-# of the .txt files.
+"""
+Given a set of brat-flavored standoff .ann files, catenates them
+into a single .ann file (with reference to the corresponding .txt
+files) so that the resulting .ann applies for the simple catenation
+of the .txt files.
+"""
 
 from __future__ import with_statement
 
@@ -11,6 +13,20 @@ import sys
 import re
 import os
 import codecs
+
+
+options = None
+
+def argparser():
+    import argparse
+    
+    ap=argparse.ArgumentParser(description='Concatenate brat annotation files')
+    ap.add_argument('-s', '--suffix', default=False, action='store_true',
+                    help='If false, remove the .ann suffix and add .txt. Otherwise, just remove the .ann suffix')
+    ap.add_argument('file', metavar='ANN', nargs='+', 
+                    help='Annotation files')
+    return ap
+
 
 def parse_id(l):
     m = re.match(r'^((\S)(\S*))', l)
@@ -87,14 +103,23 @@ def remap_equiv_idrefs(l, idmap):
     return '\t'.join(fields)
 
 def main(argv):
-    filenames = argv[1:]
+    if argv is None:
+        argv = sys.argv
+
+    global options
+    options = argparser().parse_args(argv[1:])
+
+    filenames = options.file
 
     # read in the .ann files and the corresponding .txt files for each
     anns = []
     texts = []
     for fn in filenames:
         assert re.search(r'\.ann$', fn), 'Error: argument %s not a .ann file.' % fn
-        txtfn = re.sub(r'\.ann$', '.txt', fn)
+        if options.suffix:
+            txtfn = re.sub(r'\.ann$', '', fn)
+        else:
+            txtfn = re.sub(r'\.ann$', '.txt', fn)
 
         with codecs.open(fn, 'r', encoding='utf-8') as annf:
             anns.append(annf.readlines())
@@ -214,7 +239,7 @@ def main(argv):
     # output
     for i in range(len(anns)):
         for l in anns[i]:
-            sys.stdout.write(l.encode('utf-8'))
+            sys.stdout.write(l)
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))

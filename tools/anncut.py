@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Remove portions of text from annotated files.
 
@@ -8,6 +8,7 @@ from __future__ import with_statement
 
 import sys
 import re
+import os
 
 try:
     import argparse
@@ -28,14 +29,17 @@ class ArgumentError(Exception):
 
 def argparser():
     ap=argparse.ArgumentParser(description="Remove portions of text from annotated files.")
-    ap.add_argument("-c", "--characters", metavar="[LIST]", default=None,
-                    help="Select only these characters")
+    ap.add_argument("-o", "--output", metavar="OUT", default=None,
+                    help='Output will be written to OUT.txt and OUT.ann. If None, only annotations are written, on standard output')
+    ap.add_argument("-r", "--ranges", metavar="[LIST]", default=None,
+                    help="Select only these character spans. E.g.: 23-124,453-781")
     ap.add_argument("--complement", default=False, action="store_true",
                     help="Complement the selected spans of text")
     ap.add_argument("file", metavar="FILE", nargs=1, 
                     help="Annotation file")
     return ap
-                    
+
+
 class Annotation(object):
     def __init__(self, id_, type_):
         self.id_ = id_
@@ -47,7 +51,8 @@ class Annotation(object):
 
     def remap(self, _):
         # assume not text-bound: no-op
-        return None
+        pass
+
 
 class Textbound(Annotation):
     def __init__(self, id_, type_, offsets, text):
@@ -78,26 +83,39 @@ class Textbound(Annotation):
                                   ';'.join(['%d %d' % (s, e)
                                             for s, e in self.offsets]),
                                   self.text)
+
+
 class ArgAnnotation(Annotation):
     def __init__(self, id_, type_, args):
         Annotation.__init__(self, id_, type_)
         self.args = args
+        self.textbounds = set()
+
 
 class Relation(ArgAnnotation):
     def __init__(self, id_, type_, args):
         ArgAnnotation.__init__(self, id_, type_, args)
+        for arg in args:
+            argtype, argval = arg.split(':')
+            if argtype in ['ARG1','ARG2']:
+                self.textbounds.add(argval)
 
     def __str__(self):
         return "%s\t%s %s" % (self.id_, self.type_, ' '.join(self.args))
+
 
 class Event(ArgAnnotation):
     def __init__(self, id_, type_, trigger, args):
         ArgAnnotation.__init__(self, id_, type_, args)
         self.trigger = trigger
+        for arg in args:
+            _, argval = arg.split(':')
+            self.textbounds.add(argval)
 
     def __str__(self):
         return "%s\t%s:%s %s" % (self.id_, self.type_, self.trigger, 
                                  ' '.join(self.args))
+
 
 class Attribute(Annotation):
     def __init__(self, id_, type_, target, value):
@@ -120,6 +138,7 @@ class Normalization(Annotation):
         return "%s\t%s %s %s\t%s" % (self.id_, self.type_, self.target,
                                      self.ref, self.reftext)
 
+
 class Equiv(Annotation):
     def __init__(self, id_, type_, targets):
         Annotation.__init__(self, id_, type_)
@@ -127,6 +146,7 @@ class Equiv(Annotation):
 
     def __str__(self):
         return "%s\t%s %s" % (self.id_, self.type_, ' '.join(self.targets))
+
 
 class Note(Annotation):
     def __init__(self, id_, type_, target, text):
@@ -137,11 +157,13 @@ class Note(Annotation):
     def __str__(self):
         return "%s\t%s %s\t%s" % (self.id_, self.type_, self.target, self.text)
 
+
 def parse_textbound(fields):
     id_, type_offsets, text = fields
     type_offsets = type_offsets.split(' ')
     type_, offsets = type_offsets[0], type_offsets[1:]
     return Textbound(id_, type_, offsets, text)
+
 
 def parse_relation(fields):
     # allow a variant where the two initial TAB-separated fields are
@@ -153,12 +175,14 @@ def parse_relation(fields):
     type_, args = type_args[0], type_args[1:]
     return Relation(id_, type_, args)
 
+
 def parse_event(fields):
     id_, type_trigger_args = fields
     type_trigger_args = type_trigger_args.split(' ')
     type_trigger, args = type_trigger_args[0], type_trigger_args[1:]
     type_, trigger = type_trigger.split(':')
     return Event(id_, type_, trigger, args)
+
 
 def parse_attribute(fields):
     id_, type_target_value = fields
@@ -170,21 +194,25 @@ def parse_attribute(fields):
         value = None
     return Attribute(id_, type_, target, value)
 
+
 def parse_normalization(fields):
     id_, type_target_ref, reftext = fields
     type_, target, ref = type_target_ref.split(' ')
     return Normalization(id_, type_, target, ref, reftext)
+
 
 def parse_note(fields):
     id_, type_target, text = fields
     type_, target = type_target.split(' ')
     return Note(id_, type_, target, text)
 
+
 def parse_equiv(fields):
     id_, type_targets = fields
     type_targets = type_targets.split(' ')
     type_, targets = type_targets[0], type_targets[1:]
     return Equiv(id_, type_, targets)
+
 
 parse_func = {
     'T': parse_textbound,
@@ -197,6 +225,7 @@ parse_func = {
     '*': parse_equiv,
     }
 
+
 def parse(l, ln):
     assert len(l) and l[0] in parse_func, "Error on line %d: %s" % (ln, l)
     try:
@@ -204,50 +233,83 @@ def parse(l, ln):
     except Exception:
         assert False, "Error on line %d: %s" % (ln, l)
 
-def process(fn, selection):
+
+def process(fn, selection, options):
     with open(fn, "rU") as f:
         lines = [l.rstrip('\n') for l in f.readlines()]
 
         annotations = []
         for i, l in enumerate(lines):
-            annotations.append(parse(l, i+1))
+            annotation = parse(l, i+1)
+            #sys.stderr.write('annotation: {}\n'.format(annotation))
+            annotations.append(annotation)
 
+    out = sys.stdout
+    if options.output:
+        out = open('{}.ann'.format(options.output), "w", encoding="utf-8")
+
+    kept = set()
     for a in annotations:
         if not a.in_range(selection):
+            pass
             # deletes TODO
-            raise NotImplementedError('Deletion of annotations TODO')
+            #raise NotImplementedError('Deletion of annotations TODO {}, {}'.format(a,selection))
+            #sys.stderr.write('Deletion of annotations TODO {}, {}\n'.format(a,selection))
         else:
             a.remap(selection)
+            if a.id_[0] == 'T':
+                #sys.stderr.write('Adding {} to kept\n'.format(a.id_))
+                kept.add(a.id_)
+                print(a, file=out)
+            elif a.id_[0] in ['R','E']:
+                #sys.stderr.write('Textbounds: {}\n'.format(a.textbounds))
+                if not bool(a.textbounds - kept):
+                    print(a, file=out)
+    if options.output:
+        out.close()
 
-    for a in annotations:
-        print a
+    #for a in annotations:
+        #print a
 
 class Selection(object):
     def __init__(self, options):
         self.complement = options.complement
-
-        if options.characters is None:
-            raise ArgumentError('Please specify the charaters')
-
         self.ranges = []
-        for range in options.characters.split(','):
-            try:
-                start, end = range.split('-')
-                start, end = int(start), int(end)
-                assert start >= end and start >= 1
 
-                # adjust range: CLI arguments are counted from 1 and
-                # inclusive of the character at the end offset,
-                # internal processing is 0-based and exclusive of the
-                # character at the end offset. (end is not changed as
-                # these two cancel each other out.)
-                start -= 1
+        if options.ranges is not None:
+            for range in options.ranges.split(','):
+                try:
+                    start, end = range.split('-')
+                    start, end = int(start), int(end)
+                    assert start <= end and start >= 1
 
-                self.ranges.append((start, end))
-            except Exception:
-                raise ArgumentError('Invalid range "%s"' % range)
+                    # adjust range: CLI arguments are counted from 1 and
+                    # inclusive of the character at the end offset,
+                    # internal processing is 0-based and exclusive of the
+                    # character at the end offset. (end is not changed as
+                    # these two cancel each other out.)
+                    start -= 1
+
+                    self.ranges.append((start, end))
+                except Exception:
+                    raise ArgumentError('Invalid range "%s"' % range)
+        else:
+            raise ArgumentError('Please specify the ranges')
+
 
         self.ranges.sort()
+        fn = '{}.txt'.format(os.path.splitext(options.file[0])[0])
+        out = sys.stdout
+        if options.output:
+            out = open('{}.txt'.format(options.output), "w", encoding="utf-8")
+        with open(fn, "r", encoding="utf-8") as f:
+            content = f.read()
+            i = 0
+            for (start,end) in self.ranges:
+                i += 1
+                print(content[start:end-1], file=out)
+        if options.output:
+            out.close()
 
         # initialize offset map up to end of given ranges
         self.offset_map = {}
@@ -276,6 +338,13 @@ class Selection(object):
 
         # debugging
         # print >> sys.stderr, self.offset_map
+
+    def __str__(self):
+        return '({} - {} - {} - {} - {})'.format(self.complement,
+                                       self.ranges,
+                                       self.offset_map,
+                                       self.max_offset,
+                                       self.max_mapped)
 
     def in_range(self, start, end):
         for rs, re in self.ranges:
@@ -309,6 +378,7 @@ class Selection(object):
 
         return (start, end)
 
+
 def main(argv=None):
     if argv is None:
         argv = sys.argv
@@ -316,15 +386,16 @@ def main(argv=None):
 
     try:
         selection = Selection(arg)
-    except Exception, e:
+    except Exception as e:
         print >> sys.stderr, e
         argparser().print_help()
         return 1        
 
-    for fn in arg.file:
-        process(fn, selection)
+    fn = arg.file[0]
+    process(fn, selection, arg)
 
     return 0
+
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv))

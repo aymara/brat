@@ -129,6 +129,6 @@ if __name__ == "__main__":
             with codecs.open(fn, encoding=INPUT_ENCODING) as f:
                 s = "".join(f.read())
                 sys.stdout.write(refine_split(s).encode(OUTPUT_ENCODING))
-        except Exception, e:
+        except Exception as e:
             print >> sys.stderr, "Failed to read", fn, ":", e
             
